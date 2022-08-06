@@ -1,0 +1,129 @@
+# Deploy to Azure Kubernetes Service
+# Build and push image to Azure Container Registry; Deploy to Azure Kubernetes Service
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- master
+
+resources:
+- repo: self
+
+variables:
+
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: 'aksacr5'
+  imageRepository: 'cicdwithkubernetes'
+  containerRegistry: 'aksacr5.azurecr.io'
+  dockerfilePath: '**/Dockerfile'
+  tag: '$(Build.BuildId)'
+  imagePullSecret: 'aksacr52038ed6e-auth'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+
+stages:
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: agent-linux
+    steps:
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          sudo setfacl -m user:omri:rw /var/run/docker.sock
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+    - upload: manifests
+      artifact: manifests
+
+  variables:
+  - group: secret
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    pool:
+      name: agent-linux
+    environment: 'staging.web-app'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: 'createSecret'
+              kubernetesServiceConnection: 'main'
+              namespace: 'web-app'
+              secretType: 'generic'
+              secretName: 'secrets.yaml'
+              secretArguments: '--from-literal=$(HOST) --from-literal=$(PORT) --from-literal=$(PGHOST) --from-literal=$(PGUSERNAME) --from-literal=$(PGDATABASE) --from-literal=$(PGPASSWORD) --from-literal=$(PGPORT) --from-literal=$(HOST_URL) --from-literal=$(COOKIE_ENCRYPT_PWD) --from-literal=$(NODE_ENV) --from-literal=$(OKTA_ORG_URL) --from-literal=$(OKTA_CLIENT_ID) --from-literal=$(OKTA_CLIENT_SECRET)'
+          - task: KubernetesManifest@0
+            displayName: Deploy to Kubernetes cluster
+            inputs:
+              action: deploy
+              manifests: |
+                $(Pipeline.Workspace)/manifests/ingress.yml
+                $(Pipeline.Workspace)/manifests/deployment.yml
+                $(Pipeline.Workspace)/manifests/service.yml
+              imagePullSecrets: |
+                'secrets.yaml'
+              containers: |
+                $(containerRegistry)/$(imageRepository):$(tag)
+
+
+
+- stage: Deploy2p
+  displayName: Deploy stage
+  dependsOn: Deploy
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy2Production
+
+    pool:
+      name: agent-linux
+    environment: 'prod.prod'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: 'createSecret'
+              kubernetesServiceConnection: 'prod'
+              namespace: 'prod'
+              secretType: 'generic'
+              secretName: 'secrets.yaml'
+              secretArguments: --from-literal=$(PORT) --from-literal=$(PGHOST_P) --from-literal=$(PGUSERNAME) --from-literal=$(PGDATABASE) --from-literal=$(PGPASSWORD) --from-literal=$(PGPORT) --from-literal=$(HOSTURL-PROD) --from-literal=$(COOKIE_ENCRYPT_PWD) --from-literal=$(NODE_ENV) --from-literal=$(OKTA_ORG_URL) --from-literal=$(OKTA_CLIENT_P) --from-literal=$(OKTA_SEC_P)'
+          - task: KubernetesManifest@0
+            displayName: Deploy to Kubernetes cluster
+            inputs:
+              action: deploy
+              manifests: |
+                $(Pipeline.Workspace)/manifests/ingress-prod.yml
+                $(Pipeline.Workspace)/manifests/deployment-prod.yml
+                $(Pipeline.Workspace)/manifests/service-prod.yml
+              imagePullSecrets: |
+                $(imagePullSecret)
+              containers: |
+                $(containerRegistry)/$(imageRepository):$(tag)
+
