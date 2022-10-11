@@ -44,4 +44,4 @@
 ![week6 staging](https://user-images.githubusercontent.com/105926044/178041463-0e9e05b7-49cd-45eb-8445-83aafee0eafa.jpg)
 
 
-# Very important thing about this pipeline is that it run a new pipeline after every commit of your code so pay attention and enjoy your app :)
+# Very important thing about this pipeline is that it run a new pipeline after every commit of your code so pay attention and enjoy your app.
